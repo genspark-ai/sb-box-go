@@ -2,7 +2,6 @@ package sbbox
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -119,12 +118,12 @@ func (s *SandboxesService) Freeze(ctx context.Context, id string, wait bool) (*S
 		}
 		return &info, nil
 	}
-	deadline := time.Now().Add(90 * time.Second)
+	deadline := time.Now().Add(freezeWaitCap)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(freezePollInterval):
 		}
 		cur, err := s.Get(ctx, id)
 		if err != nil {
@@ -133,15 +132,23 @@ func (s *SandboxesService) Freeze(ctx context.Context, id string, wait bool) (*S
 		switch cur.State {
 		case "frozen":
 			return &cur.SandboxInfo, nil
-		case "freezing":
+		case "freezing", "running":
+			// running can still show up right after a 202: the freeze is
+			// queued or the read lags the write.
 		default:
 			return nil, &ConflictError{&APIError{Status: 409, Message: fmt.Sprintf("freeze of %s ended in state %q", id, cur.State), Fields: map[string]any{"state": cur.State}}}
 		}
 		if time.Now().After(deadline) {
-			return nil, errors.New("sbbox: freeze of " + id + " still in progress after 90s")
+			return nil, fmt.Errorf("sbbox: freeze of %s still in progress after %s", id, freezeWaitCap)
 		}
 	}
 }
+
+// Freeze wait pacing; variables so tests can shorten them.
+var (
+	freezePollInterval = 2 * time.Second
+	freezeWaitCap      = 90 * time.Second
+)
 
 // Resume brings a frozen sandbox back. timeout (seconds) 0 = unchanged.
 func (s *SandboxesService) Resume(ctx context.Context, id string, timeout int) (*SandboxInfo, error) {

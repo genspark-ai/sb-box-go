@@ -274,6 +274,33 @@ func TestFreeze202Polls(t *testing.T) {
 	}
 }
 
+func TestFreezeWaitToleratesRunning(t *testing.T) {
+	old := freezePollInterval
+	freezePollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { freezePollInterval = old })
+
+	m := newMock(t)
+	m.freezeStates = []string{"running", "freezing", "frozen"}
+	info, err := m.client(t).Sandboxes.Freeze(ctx, "sbx-freeze", true)
+	if err != nil || info.State != "frozen" {
+		t.Fatalf("freeze wait through running: %v %+v", err, info)
+	}
+	if n := m.count("GET", "/sandboxes/sbx-freeze"); n != 3 {
+		t.Fatalf("want 3 polls, got %d", n)
+	}
+
+	m2 := newMock(t)
+	m2.freezeStates = []string{"freezing", "failed"}
+	_, err = m2.client(t).Sandboxes.Freeze(ctx, "sbx-freeze", true)
+	var ce *ConflictError
+	if !errors.As(err, &ce) || !strings.Contains(ce.Error(), `"failed"`) {
+		t.Fatalf("want ConflictError naming failed, got %v", err)
+	}
+	if n := m2.count("GET", "/sandboxes/sbx-freeze"); n != 2 {
+		t.Fatalf("want 2 polls before failure, got %d", n)
+	}
+}
+
 func TestErrorMapping(t *testing.T) {
 	m := newMock(t)
 	c := m.client(t)

@@ -25,9 +25,12 @@ type mockServer struct {
 	reqs   []recordedReq
 	files  map[string][]byte
 	freeze int // GET /sandboxes/sbx-freeze polls before "frozen"
-	clone  int // 503s before clone succeeds
-	build  int // GETs before template ready
-	fail   int // 503s before /regions succeeds
+	// When set, GET /sandboxes/sbx-freeze answers these states in order
+	// (the last one repeats) instead of the freeze countdown.
+	freezeStates []string
+	clone        int // 503s before clone succeeds
+	build        int // GETs before template ready
+	fail         int // 503s before /regions succeeds
 }
 
 type recordedReq struct {
@@ -173,11 +176,17 @@ func (m *mockServer) route(w http.ResponseWriter, r *http.Request, body []byte) 
 		m.mu.Lock()
 		f := m.freeze
 		m.freeze--
-		m.mu.Unlock()
 		st := "freezing"
 		if f <= 0 {
 			st = "frozen"
 		}
+		if len(m.freezeStates) > 0 {
+			st = m.freezeStates[0]
+			if len(m.freezeStates) > 1 {
+				m.freezeStates = m.freezeStates[1:]
+			}
+		}
+		m.mu.Unlock()
 		writeJSON(w, 200, sandboxJSON("sbx-freeze", st))
 	case p == "/sandboxes/sbx-freeze/freeze":
 		writeJSON(w, 202, map[string]any{"id": "sbx-freeze", "state": "freezing"})
